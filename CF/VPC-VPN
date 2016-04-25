@@ -1,0 +1,360 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "This template creates a VPC with a private subnet and a public subnet with openVPN server.",
+
+  "Parameters" : {
+        
+    "AdminCidrIp" : {
+      "Type" : "String",
+      "Description" : "Source CIDR block for administrating the openVPN server",
+    },
+    
+    "KeyName": {
+      "Description" : "Name of an existing EC2 key pair to enable SSH access to the openVPN server",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "255",
+      "AllowedPattern" : "[\\x20-\\x7E]*",
+      "ConstraintDescription" : "can contain only ASCII characters."
+    }
+    
+  },
+
+  "Mappings" : {
+    "RegionMap" : {
+      "us-east-1"      : { "AMI" : "ami-89606ce3" },
+      "us-west-1"      : { "AMI" : "ami-6ef0820e" },
+      "us-west-2"      : { "AMI" : "ami-7516fe15" },
+      "eu-west-1"      : { "AMI" : "ami-359c1846" },
+      "ap-southeast-1" : { "AMI" : "ami-397eb55a" },
+      "ap-southeast-2" : { "AMI" : "ami-e2d3f381" },
+      "ap-northeast-1" : { "AMI" : "ami-4d607523" }
+    },
+    
+    "SubnetConfig" : {
+      "VPC"     : { "CIDR" : "10.0.0.0/16" },
+      "Public"  : { "CIDR" : "10.0.0.0/24" },
+      "Private" : { "CIDR" : "10.0.1.0/24" }
+    }
+
+  },
+  
+  "Resources" : {
+
+    "VPC" : {
+      "Type" : "AWS::EC2::VPC",
+      "Properties" : {
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "VPC", "CIDR" ]},
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Public" }
+        ]
+      }
+    },
+    
+    "InternetGateway" : {
+      "Type" : "AWS::EC2::InternetGateway",
+      "Properties" : {
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Public" }
+        ]
+      }
+    },
+    
+    "GatewayToInternet" : {
+       "Type" : "AWS::EC2::VPCGatewayAttachment",
+       "Properties" : {
+         "VpcId" : { "Ref" : "VPC" },
+         "InternetGatewayId" : { "Ref" : "InternetGateway" }
+       }
+    },
+    
+    "PublicSubnet" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Public", "CIDR" ]},
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Public" }
+        ]
+      }
+    },
+        
+    "PublicRouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Public" }
+        ]
+      }
+    },
+
+    "PublicRoute" : {
+      "Type" : "AWS::EC2::Route",
+      "DependsOn" : "GatewayToInternet",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "PublicRouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "InternetGateway" }
+      }
+    },
+    
+    "PublicSubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PublicSubnet" },
+        "RouteTableId" : { "Ref" : "PublicRouteTable" }
+      }
+    },
+    
+    "PublicNetworkAcl" : {
+      "Type" : "AWS::EC2::NetworkAcl",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Public" }
+        ]
+      }
+    },
+
+    "InboundHTTPSPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "100",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : { "From" : "443", "To" : "443" }
+      }
+    },
+
+    "InboundUDPPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "101",
+        "Protocol" : "17",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : { "From" : "1194", "To" : "1194" }
+      }
+    },
+
+    "InboundSSHPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "102",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : { "Ref" : "AdminCidrIp" },
+        "PortRange" : { "From" : "22", "To" : "22" }
+      }
+    },
+    
+    "InboundADMPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "103",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : { "Ref" : "AdminCidrIp" },
+        "PortRange" : { "From" : "943", "To" : "943" }
+      }
+    },
+    
+    "InboundEmphemeralPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "104",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : { "From" : "1024", "To" : "65535" }
+      }
+    },
+
+    "OutboundPublicNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" },
+        "RuleNumber" : "100",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "true",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : { "From" : "0", "To" : "65535" }
+      }
+    },
+
+    "PublicSubnetNetworkAclAssociation" : {
+      "Type" : "AWS::EC2::SubnetNetworkAclAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PublicSubnet" },
+        "NetworkAclId" : { "Ref" : "PublicNetworkAcl" }
+      }
+    },    
+        
+    "PrivateSubnet" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Private", "CIDR" ]},
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Private" }
+        ]
+      }
+    },
+
+    "PrivateRouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },
+        "Tags" : [
+          { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } },
+          { "Key" : "Network", "Value" : "Private" }
+        ]
+      }
+    },
+
+    "PrivateSubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PrivateSubnet" },
+        "RouteTableId" : { "Ref" : "PrivateRouteTable" }
+      }
+    },
+
+    "PrivateNetworkAcl" : {
+      "Type" : "AWS::EC2::NetworkAcl",
+      "Properties" : {
+        "VpcId" : {"Ref" : "VPC"},
+        "Tags" : [
+          {"Key" : "Application", "Value" : { "Ref" : "AWS::StackId"} },
+          {"Key" : "Network", "Value" : "Private" }
+        ]
+      }
+    },
+
+    "InboundPrivateNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : {"Ref" : "PrivateNetworkAcl"},
+        "RuleNumber" : "100",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "false",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : {"From" : "0", "To" : "65535"}
+      }
+    },
+
+    "OutBoundPrivateNetworkAclEntry" : {
+      "Type" : "AWS::EC2::NetworkAclEntry",
+      "Properties" : {
+        "NetworkAclId" : {"Ref" : "PrivateNetworkAcl"},
+        "RuleNumber" : "100",
+        "Protocol" : "6",
+        "RuleAction" : "allow",
+        "Egress" : "true",
+        "CidrBlock" : "0.0.0.0/0",
+        "PortRange" : {"From" : "0", "To" : "65535"}
+      }
+    },
+
+    "PrivateSubnetNetworkAclAssociation" : {
+      "Type" : "AWS::EC2::SubnetNetworkAclAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PrivateSubnet" },
+        "NetworkAclId" : { "Ref" : "PrivateNetworkAcl" }
+      }
+    },
+  
+    "openvpnIP" : {
+      "Type" : "AWS::EC2::EIP",
+      "DependsOn" : "GatewayToInternet",
+      "Properties" : {
+        "Domain" : "vpc"
+      }
+    },
+
+	"openVPN" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ]},
+        "InstanceType" : "t2.micro",		
+        "KeyName" : { "Ref" : "KeyName" },
+		"SubnetId" : { "Ref" : "PublicSubnet" },
+        "SecurityGroupIds" : [{ "Ref" : "openvpnSecurityGroup" }],
+		"Tags" : [{ "Key" : "Name", "Value" : "openVPN server" }],
+		"UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+				"public_hostname=",
+				{ "Ref" : "openvpnIP" }
+              ]
+            ]
+          }        
+
+        }
+      },
+	  "DependsOn" : "openvpnIP"
+    },
+    
+    "openvpnSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VPC" },	  
+        "GroupDescription" : "Security group for the openVPN server",
+        "SecurityGroupIngress" : [ 
+         {"IpProtocol" : "tcp", "FromPort" : "443", "ToPort" : "443", "CidrIp" : "0.0.0.0/0"},		
+         {"IpProtocol" : "udp", "FromPort" : "1194", "ToPort" : "1194", "CidrIp" : "0.0.0.0/0" },
+         {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : { "Ref" : "AdminCidrIp"} },
+         {"IpProtocol" : "tcp", "FromPort" : "943", "ToPort" : "943", "CidrIp" : { "Ref" : "AdminCidrIp"} }		 
+        ]
+      }
+    },
+
+   	"IPAssoc" : {
+	  "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "AllocationId": { "Fn::GetAtt" : [ "openvpnIP", "AllocationId" ] },
+        "InstanceId": { "Ref" : "openVPN" }
+      },
+      "DependsOn" : "openVPN"
+    }
+    
+  },
+  
+  "Outputs" : {
+  
+    "OpenVPNServerAdminURL" : {
+      "Value" : { "Fn::Join" : ["", ["https://", { "Ref" : "openvpnIP" }, ":943/admin" ]] },
+      "Description" : "openVPN Server Admin URL"
+    }, 
+	
+	"OpenVPNServerURL" : {
+      "Value" : { "Fn::Join" : ["", ["https://", { "Ref" : "openvpnIP" } ]] },
+      "Description" : "openVPN Server URL"
+    } 
+	    
+  }
+  
+}
